@@ -91,6 +91,7 @@ class EPSM(nn.Module):
         
         in_out_dim = [(a, b) for a, b in zip(dims, dims[1:])]
         print(in_out_dim)
+
         # down blocks
         self.down_blocks = []
         n_reso = len(in_out_dim)
@@ -138,5 +139,7 @@ class EPSM(nn.Module):
         for up_block in self.up_blocks:
             x = torch.cat((x, hiddens.pop()), dim=-1)
             x, _ = up_block(x, None, t)
+            
         x = self.final_conv(x)
+
         return x

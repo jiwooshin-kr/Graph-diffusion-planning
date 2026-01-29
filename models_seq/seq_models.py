@@ -12,17 +12,29 @@ import numpy as np
 class Destroyer:
     
     def __init__(self, A, betas, max_T, device) -> None:
+        # why do we use detach?
         self.A = A.clone().detach().to(device, dtype=torch.float32)
         self.n_vertex = A.shape[0]
         self.device = device
+
         A_ = (self.A - torch.diag(self.A.sum(dim=0)).to(self.device))
+        
         self.betas = betas.to(device=self.device)
+
+        # maximum diffusion time steps
         self.max_T = max_T
+
+        # self.matrices:cumulative diffusion operator up to time max_T 
+        # => self.matrices[t]: tensor shaped (T+1, V, V)
         self.matrices = torch.zeros(self.max_T + 1, self.n_vertex, self.n_vertex).to(self.device)
+
         self.Q = torch.zeros_like(self.matrices).to(self.device)
         self.matrices[0] = torch.eye(self.n_vertex, device=self.device)
+        
         self.Q[0] = torch.eye(self.n_vertex, device=self.device)
+        
         for i in range(1, self.max_T + 1):
+            # C_t = exp(beta_{t-1} * A_) and A_ = A - D
             self.Q[i] = torch.linalg.matrix_exp(A_ * self.betas[i - 1])
             self.matrices[i] = self.Q[i] @ self.matrices[i - 1]
         
@@ -45,17 +57,28 @@ class Destroyer:
         # ts: [t_1, ..., t_n]
         # x_diffused: list of diffused labels in tensor
         lengths = [x.shape[0] for x in xs]
+
         batch_size, horizon = len(lengths), max(lengths)
+
         if type(xs) is torch.Tensor and xs.dim() == 3:
+            # b: batch size, h: horizon (sequence length), c: n_vertex
+            # Here, c can be one-hot vectot / probability distribuitons / logits
             xs = rearrange(xs, "b h c -> c (b h)").to(self.device)
+
+            # ts = torch.randint(1, self.max_T + 1, [batch_size])
+            # Therefore, it is random position
             x_distr = self.matrices[ts[0]] @ xs
+            
             x_distr = rearrange(x_distr, "c (b h) -> b h c", h=horizon)
             return x_distr
+
+        # allows different timestpes per trajectory
         else:
             xs_padded = pad_sequence(xs, batch_first=True, padding_value=1.).to(self.device).long()
             # multiply one hot equivalent to pick the specific column
             # [1, 3, 2] -> [1,1,1..,1, 3,3,3...,3, 2,2,...2]
             ts_padded = ts.view(-1, 1).repeat(1, horizon).view(-1,)
+
             x_distr_padded = self.matrices[ts_padded, :, xs_padded.view(-1)]
             if ret_distr:
                 return x_distr_padded
@@ -83,16 +106,21 @@ class Restorer(nn.Module):
     
     def forward(self, xs):
         # xs: list of tensors of labels
+        # => xs: (batch, sequence length, n_vertex) 
         batch_size = len(xs)
         lengths = torch.Tensor([x.shape[0] for x in xs]).long().to(self.device)
         
         # uniformly choose t
         ts = torch.randint(1, self.max_T + 1, [batch_size]).to(self.device)
-        
+
         x_t = self.destroyer.diffusion(xs, ts, ret_distr=False)
+
         xt_padded = pad_sequence(x_t, batch_first=True, padding_value=0).long()
         xs_padded = pad_sequence(xs, batch_first=True, padding_value=0).long()
+        
+        # horizon => sequence length
         horizon = xt_padded.shape[1]
+        # ts_padded: All tokens in the same sequence share the same diffusion time t
         ts_padded = ts.view(-1, 1).repeat(1, horizon)
         
         # true_probs_unorm = Q_t @ x_t * \bar{E}_{t-1} @ x_0 both x_0 and x_t is categorical
@@ -106,15 +134,21 @@ class Restorer(nn.Module):
         # pred_probs_unorm = E_t @ x_t * \bar{E}_{t-1} @ \hat{x}_0  x_0 is logits while x_t is categorical
         Et_minus_one_bar_hat_x0 = (self.matrices[ts - 1] @ x0_pred_probs.transpose(2, 1).to(self.des_device)).to(self.device)
         Et_minus_one_bar_hat_x0 = rearrange(Et_minus_one_bar_hat_x0, "b c h -> (b h) c")
+        
         pred_probs_unorm = EtXt * Et_minus_one_bar_hat_x0
         pred_probs = pred_probs_unorm / pred_probs_unorm.sum(1, keepdim=True)
         pred_logits = probs_to_logits(pred_probs)
         pred_logits = rearrange(pred_logits, "(b h) c -> b h c", h=horizon)
+        
         eps = 0.000001
+        
         kl_loss = sum([F.kl_div(pred_logits[k][:l] + eps, true_probs[k][:l], reduction="batchmean") for k, l in enumerate(lengths)])
+        
         ce_loss = sum([F.cross_entropy(x0_pred_logits[k][:lengths[k]].to(x) + eps, x[:lengths[k]].long(), reduction="mean") for k, x in enumerate(xs)])
+        
         con_loss = -sum([((self.A @ (x0_pred_probs[k, 1:l, :] + eps).log().T).T * x0_pred_probs[k, :l-1, :]).mean() for k, l in enumerate(lengths)]) / batch_size
         con_loss += -sum([((self.A @ (x0_pred_probs[k, :l-1, :] + eps).log().T).T * x0_pred_probs[k, 1:l, :]).mean() for k, l in enumerate(lengths)]) / batch_size
+        
         return kl_loss, ce_loss, con_loss * 100
          
     def restore(self, xt_padded, lengths=None, ts=None):
@@ -239,6 +273,7 @@ class Restorer(nn.Module):
                 prob = torch.softmax(logits, dim=-1)
                 nlls[i + left] -= (prob[0, path[0]] + 0.001).log()
                 nlls[i + left] -= (prob[torch.arange(lengths[i] - 1), path[1:]] + 0.00001).log().sum()
+        
         return nlls
         
         

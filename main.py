@@ -24,6 +24,7 @@ if __name__ == "__main__":
         n_vertex = args.n_vertex
         name = f"v{args.n_vertex}_p{args.n_path}_{args.min_len}{args.max_len}"
         dataset = DataGenerator(args.n_vertex, args.n_path, args.min_len, args.max_len, device, args.path, name)
+    
     elif args.d_name != "":
         date = "20161101" if args.d_name == "chengdu" else "20161001"
         dataset = TrajFastDataset(args.d_name, [date], args.path, device, is_pretrain=True)
@@ -35,6 +36,8 @@ if __name__ == "__main__":
         f.writelines(str(args))
     
     # set model
+
+    # Algorithm 1: training
     if args.method == "seq":
         from models_seq.seq_models import Destroyer, Restorer
         from models_seq.eps_models import EPSM
@@ -43,32 +46,47 @@ if __name__ == "__main__":
         suffix = "cd" if args.d_name == "chengdu" else "xa"
         
         betas = torch.linspace(args.beta_lb, args.beta_ub, args.max_T)
+        
+        # destroyer
         destroyer = Destroyer(dataset.A, betas, args.max_T, device)
+        # node2vec embedding path?
         pretrain_path = join(args.path, f"{args.d_name}_node2vec.pkl")
+
+        # eval(): makes string to list -> e.g. eval("[100, 120, 200]")
         dims = eval(args.dims)
         eps_model = EPSM(dataset.n_vertex, x_emb_dim=args.x_emb_dim, dims=dims, device=device, hidden_dim=args.hidden_dim, pretrain_path=pretrain_path)
+        
+        # model => restorer
         model = Restorer(eps_model, destroyer, device)
         
         trainer = Trainer(model, dataset, args.model_path)
         trainer.train_gmm(gmm_samples=args.gmm_samples, n_comp=args.gmm_comp)
         trainer.train(args.n_epoch, args.bs, args.lr)
+
         model.eval()    
         torch.save(model, join(args.model_path, f"{args.model_name}.pth"))
         
         model.eval()    
-        
+    
+
+    # Algorithm 3: source -> destination
     elif args.method == "plan":
         from planner.planner import Planner
         from planner.trainer import Trainer
         suffix = "cd" if args.d_name == "chengdu" else "xa"
 
         pretrain_path = join(args.path, f"{args.d_name}_node2vec.pkl")
+
         restorer = torch.load(f"./sets_model/no_plan_gen_{suffix}.pth")
         destroyer = restorer.destroyer
+
         model = Planner(dataset.G, dataset.A, restorer, destroyer, device, x_emb_dim=args.x_emb_dim, pretrain_path=pretrain_path)
+        
         trainer = Trainer(model, dataset, device, args.model_path)
         trainer.train(args.n_epoch, args.bs, args.lr)
+        
         model.eval()
+        
         torch.save(model, join(args.model_path, f"{args.model_name}.pth"))
         
     
