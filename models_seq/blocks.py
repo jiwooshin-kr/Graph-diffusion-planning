@@ -19,8 +19,11 @@ class SinusoidalPosEmb(nn.Module):
         # x: batch of times
         emb = x.view(-1, 1) * self.emb.unsqueeze(0)
         encodings = torch.zeros(x.shape[0], self.dim, device=self.device)
+        
+        # [0::2] means start from at index 0, step by 2
         encodings[:, 0::2] = emb.sin()
         encodings[:, 1::2] = emb.cos()
+        
         return encodings
 
 
@@ -29,7 +32,9 @@ class Conv1dBlock(nn.Module):
 
     def __init__(self, i_channels, o_channels, kernel_size, n_groups=8):
         super().__init__()
-
+        
+        # original data shape: (b, h, c)
+        # nn.Conv1d expects (b, c, h)
         self.block = nn.Sequential(
             Rearrange("b h c -> b c h"), 
             nn.Conv1d(i_channels, o_channels, kernel_size, padding=kernel_size // 2),
@@ -64,18 +69,25 @@ class LinearAttention(nn.Module):
         if lengths is not None:
             b, h, c = x.shape
             mask = torch.zeros(b, h + 1, c).long().to(self.device)
+            # padding -> mask to 1
             mask[torch.arange(mask.shape[0]), lengths] = 1
+            # cumsum -> e.g. if length of sentence is 3 -> mask: [0, 0, 0, 1, 1, 1, ...]
             mask = mask.cumsum(dim=1)
             mask = mask[:, :h, :]
+            # Change the values of x using mask
+            # the position where mask value is 1 -> change to 0
             x = torch.masked_fill(x, mask==1, 0)
 
         x = rearrange(x, "b d c -> b c d")
+        # .chunk(3, dim=1) -> split into 3 parts along dim=1
         qkv = self.to_qkv(x).chunk(3, dim=1)
+
         q, k, v = map(lambda t: rearrange(t, "b (h c) d -> b h c d", h=self.heads), qkv)
         q = q * self.scale
         if lengths is not None:
             b, h, c, d = q.shape
             mask = torch.zeros(b, h, c, d + 1).long().to(self.device)
+            # padding -> mask to 1
             mask[torch.arange(lengths.shape[0]), :, :, lengths] = 1
             mask = mask.cumsum(dim=-1)[:, :, :, :d]
             # mask q and k

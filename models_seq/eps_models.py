@@ -58,7 +58,11 @@ class UnetBlock(nn.Module):
         x = self.xtblock1(xs, ts)
         x = self.xtblock2(x, ts)
         h = self.attn(x, lengths)
+        # originally -> it was down/up sampling
+        # however, we don't use the down/up sampling -> just identity -> x and h are the same !
         x = self.sample(h)
+        
+        # x for next layer, h for skip connection
         return x, h
 
 
@@ -70,11 +74,14 @@ class EPSM(nn.Module):
         self.device = device
         # temporal embedding
         self.time_mlp = nn.Sequential(
+            # [Question] Why do we need SinusoidalPosEmb here? Because time t itself represents the 'time'.
+            # [Answer] The network cannot use the sclar t effectively just by giving it the number t.
             SinusoidalPosEmb(time_dim, device), 
             nn.Linear(time_dim, 4 * time_dim, device=device), 
             nn.Mish(), 
             nn.Linear(4 * time_dim, time_dim, device=device)
         )
+
         # n_vertex denotes <end>,  n_vertex + 1 denotes <padding>
         if pretrain_path is not None:
             node2vec = pickle.load(open(pretrain_path, "rb"))
@@ -109,6 +116,7 @@ class EPSM(nn.Module):
         # up blocks
         self.up_blocks = []
         for k, (out_dim, in_dim) in enumerate(reversed(in_out_dim[1:])):
+            # in_dim*2 because of skip connections
             self.up_blocks.append(UnetBlock(
                 in_dim * 2, time_dim, out_dim, device, 
                 down_up="up", last=(k == n_reso - 1)))
@@ -126,7 +134,11 @@ class EPSM(nn.Module):
         # xt_padded: shape b, h, each is a xt label
         # t: shape b
         t = self.time_mlp(t)
+        # change one-hot vector to embedding by word2vec
+        # xt_padded: b, h -> x: b, h, c
         x = self.x_embedding(xt_padded)
+
+        # store hiddens for skip connections
         hiddens = []
         for k, down_block in enumerate(self.down_blocks):
             x, h = down_block(x, lengths if k == 0 else None, t)
@@ -137,6 +149,7 @@ class EPSM(nn.Module):
         x = self.mid_block2(x, t)
         
         for up_block in self.up_blocks:
+            # dim = -1: dimension of features (embedding of each token)
             x = torch.cat((x, hiddens.pop()), dim=-1)
             x, _ = up_block(x, None, t)
             

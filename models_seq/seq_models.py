@@ -131,6 +131,7 @@ class Restorer(nn.Module):
         
         x0_pred_logits = self.restore(xt_padded.to(self.model_device), lengths.to(self.model_device), ts.to(self.model_device))
         x0_pred_probs = F.softmax(x0_pred_logits, dim=-1)
+        
         # pred_probs_unorm = E_t @ x_t * \bar{E}_{t-1} @ \hat{x}_0  x_0 is logits while x_t is categorical
         Et_minus_one_bar_hat_x0 = (self.matrices[ts - 1] @ x0_pred_probs.transpose(2, 1).to(self.des_device)).to(self.device)
         Et_minus_one_bar_hat_x0 = rearrange(Et_minus_one_bar_hat_x0, "b c h -> (b h) c")
@@ -142,11 +143,18 @@ class Restorer(nn.Module):
         
         eps = 0.000001
         
+        # F.kl_div (input, target, ...), input: log-probability, target: probability distribution
+        # [Question] Why do we add eps here? -> pred_logits[k][:l] is already log-probability.
+        # Therefore, we add eps inside the log to avoid log(0) -> isn't it??
         kl_loss = sum([F.kl_div(pred_logits[k][:l] + eps, true_probs[k][:l], reduction="batchmean") for k, l in enumerate(lengths)])
         
+        # .to(x) to ensure the same device
         ce_loss = sum([F.cross_entropy(x0_pred_logits[k][:lengths[k]].to(x) + eps, x[:lengths[k]].long(), reduction="mean") for k, x in enumerate(xs)])
-        
+
+        # k: data index, l: length of data 
         con_loss = -sum([((self.A @ (x0_pred_probs[k, 1:l, :] + eps).log().T).T * x0_pred_probs[k, :l-1, :]).mean() for k, l in enumerate(lengths)]) / batch_size
+        
+        # This is because the graph is undirected (i+1 -> i)
         con_loss += -sum([((self.A @ (x0_pred_probs[k, :l-1, :] + eps).log().T).T * x0_pred_probs[k, 1:l, :]).mean() for k, l in enumerate(lengths)]) / batch_size
         
         return kl_loss, ce_loss, con_loss * 100
