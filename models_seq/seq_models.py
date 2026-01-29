@@ -180,6 +180,7 @@ class Restorer(nn.Module):
             paths.extend(self.sample_with_len(lengths[b * batch_traj_num: min((b + 1) * batch_traj_num, n_samples)]))
         return paths
     
+    # reverse diffusion process
     def sample_with_len(self, lengths, ret_distr=False, xt=None, T=None, ret_trace=False):
         if ret_trace:
             reverse_trace = defaultdict(list) # t -> [path1, path2,...]
@@ -193,6 +194,7 @@ class Restorer(nn.Module):
         else:
             xt = xt.to(self.device)
         with torch.no_grad():
+            # !!! Reverse diffusion from T to 1 !!!
             for t in range(T, 0, -1):
                 ts = torch.Tensor([t]).long().to(self.device).repeat(n_samples)
                 x0_pred_logits = self.restore(xt, lengths, ts) 
@@ -203,10 +205,14 @@ class Restorer(nn.Module):
                 Et_minus_one_bar_hat_x0 = rearrange(Et_minus_one_bar_hat_x0, "b c h -> (b h) c")
                 pred_probs_unorm = EtXt * Et_minus_one_bar_hat_x0
                 pred_probs = pred_probs_unorm / pred_probs_unorm.sum(1, keepdim=True)
+                
+                # actual data sampling!! 
                 xt = torch.multinomial(pred_probs, num_samples=1, replacement=True)
                 xt = rearrange(xt, "(b h) 1 -> b h", b=n_samples)
+                
                 if ret_trace:
                     reverse_trace[t] = [xt[k][:lengths[k]].cpu().tolist() for k in range(n_samples)]
+            
             # torch.multinomial(x0_pred_probs, num_samples=1, replacement=True)
             # x = self.beam_search(x0_pred_probs, lengths, n_beam=10)
             x = torch.zeros_like(xt).long().to(self.device)
@@ -258,6 +264,7 @@ class Restorer(nn.Module):
             x[k, :length - 1] = pred[1:, choice]
             x[k, length - 1] = frontiers[choice]
         return x        
+    
     
     def eval_nll(self, real_paths):
         total = len(real_paths)
