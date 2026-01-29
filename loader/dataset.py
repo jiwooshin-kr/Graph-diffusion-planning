@@ -26,19 +26,28 @@ class TrajFastDataset(Dataset):
             print("finished")
         else:
             self.G = pickle.load(open(join(path, f"{name}_G.pkl"), "rb"))
+
             self.n_vertex = len(self.G.nodes)
+
             self.A_orig = torch.load(join(path, f"{name}_A.ts"), map_location=torch.device("cpu"))
+
             print("loading path...")
             self.v_paths = np.loadtxt(join(path, f"{name}_v_paths.csv"), delimiter=',') 
             print("finish loading")
+
             nonzeros = np.nonzero(self.v_paths.sum(0))[0]
             self.nonzeros = nonzeros
+
             print(f"shrink into {nonzeros.shape[0]} nodes")
+
+            # Shinrk the adjacency matrix
             B = self.A_orig[nonzeros, :]
             self.A = B[:, nonzeros]
+            
             self.v_paths = self.v_paths[:, nonzeros]
             self.length = self.v_paths.shape[0]
             self.shrink_nonzero_dict = dict()
+            
             for k in range(nonzeros.shape[0]):
                 self.shrink_nonzero_dict[nonzeros[k]] = k
         
@@ -60,20 +69,27 @@ class TrajFastDataset(Dataset):
         
         self.n_vertex = len(self.G.nodes)
         self.dates = dates
+
         h5_file = join(path, f"{city}_h5_paths.h5")
+
         self.f = h5py.File(h5_file, "r")
+
         sample_len = [self.f[date]["state_prefix"].shape[0] - 1 for date in dates]
         accu_len = [0 for _ in range(len(sample_len) + 1)]
+
         for k, l in enumerate(sample_len):
             accu_len[k + 1] = accu_len[k] + l
+
         self.accu_len = accu_len
         self.total_len = accu_len[-1]
+
         # if pretrain
         if is_pretrain:
             embed_path = join(path, f"{city}_node2vec.pkl")
             path_path = join(path, f"{city}_path.pkl")
             get_node2vec(self.G, embed_path, path_path)
-        
+    
+    # binary search that finds which date a trajectory index belongs to
     def __upper_bound(self, num):
         l, r = 0, len(self.accu_len)
         while l < r:

@@ -71,7 +71,8 @@ if __name__ == "__main__":
         model.eval()
         torch.save(model, join(args.model_path, f"{args.model_name}.pth"))
         
-        
+    
+    # Evaluation ? 
     if args.method != "plan":
         gen_paths = model.sample(args.eval_num)
         real_paths = dataset.get_real_paths(args.eval_num)

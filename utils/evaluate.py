@@ -74,4 +74,6 @@ class Evaluator:
     def eval_all(self):
         div_dict = self.calculate_divergences()
         nll_dict = self.calculate_nll()
+        
+        # **: unpacks the dictionary into keyword arguments
         return dict(div_dict, **nll_dict)
