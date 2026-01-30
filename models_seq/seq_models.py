@@ -273,20 +273,43 @@ class Restorer(nn.Module):
         n_batch = (total + batch_traj_num - 1) // batch_traj_num
         
         for k in range(n_batch):
+            # index range for the batch => real_paths[left: right]
             left = k * batch_traj_num
             right = min((k + 1) * batch_traj_num, total)
             batch_size = right - left
+
             xs = [torch.tensor(path).to(self.device) for path in real_paths[left: right]]
             lengths = [x.shape[0] for x in xs]
+            
             ts = torch.tensor([self.max_T // 20]).repeat(batch_size).to(self.device)
+
+            # xs -> real data
+            # [Question] Why does it use x_{max_T//20} ?? -> shouldn't it be x_{max_T}?
             x_t = self.destroyer.diffusion(xs, ts)
             xt_padded = pad_sequence(x_t, batch_first=True, padding_value=0).long()
+
             lengths = torch.Tensor(lengths).long().to(self.device)
             _, probs = self.sample_with_len(lengths, ret_distr=True, xt=xt_padded, T=self.max_T // 20)
+
             for i, path in enumerate(real_paths[left: right]):
+                # masking -> self.A[path[:-1]] == 0
+                # => selects the rows of self.A corresponding to the vertices in path[:-1]
+                # --- Shape analysis ---
+                # self.A[path[:-1]] => shape (lengths[i]-1, n_vertex)
+                # probs_to_logits(probs[i])[1:lengths[i], :] => shape (lengths[i]-1, n_vertex)
+                # why masking? => exclude non-existing edges!!!
                 logits = torch.masked_fill(probs_to_logits(probs[i])[1:lengths[i], :], self.A[path[:-1]] == 0, -1e20)
+                
                 prob = torch.softmax(logits, dim=-1)
+
+                # [Question] Why do we need this line? Isn't it q(v_0 | v_0) ?
+                # prob[0, :] -> corresponds to p(v_1 | v_0)
+                # prob에서 i-th row -> (i+1)-th node의 확률 분포를 나타냄
                 nlls[i + left] -= (prob[0, path[0]] + 0.001).log()
+
+                # torch.arange(lengths[i] - 1) -> [0, 1, 2, ..., lengths[i]-2]
+                # path[1:] -> true subsequent tokens
+                # prob[torch.arange(lengths[i] - 1), path[1:]] => p(x_{t+1} | x_t)
                 nlls[i + left] -= (prob[torch.arange(lengths[i] - 1), path[1:]] + 0.00001).log().sum()
         
         return nlls
